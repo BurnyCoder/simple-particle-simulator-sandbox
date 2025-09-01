@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Particle Simulator Sandbox</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: none; /* Prevents scrolling on touch devices when drawing on canvas */
+        }
+        .element-button.active {
+            transform: scale(1.1);
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
+            border-color: #60a5fa; /* blue-400 */
+        }
+        canvas {
+            cursor: crosshair;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-crisp-edges;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl mx-auto">
+        <h1 class="text-3xl md:text-4xl font-bold text-center mb-2 text-gray-200">Particle Simulator Sandbox</h1>
+        <p class="text-center text-gray-400 mb-4">Click and drag on the canvas to draw with the selected element.</p>
+
+        <!-- Controls -->
+        <div class="bg-gray-800 p-3 rounded-lg shadow-lg mb-4 flex flex-wrap items-center justify-center gap-2">
+            <div class="flex flex-wrap items-center justify-center gap-2">
+                <button id="sand" class="element-button active border-2 border-transparent font-semibold py-2 px-4 rounded-lg transition-all duration-200" style="background-color: #facc15; color: #422006;">Sand</button>
+                <button id="water" class="element-button border-2 border-transparent font-semibold py-2 px-4 rounded-lg transition-all duration-200" style="background-color: #38bdf8; color: #075985;">Water</button>
+                <button id="dirt" class="element-button border-2 border-transparent font-semibold py-2 px-4 rounded-lg transition-all duration-200" style="background-color: #854d0e; color: #fefce8;">Dirt</button>
+                <button id="eraser" class="element-button border-2 border-transparent font-semibold py-2 px-4 rounded-lg transition-all duration-200 bg-pink-500 text-white">Eraser</button>
+            </div>
+            <div class="h-8 w-px bg-gray-600 mx-3 hidden sm:block"></div>
+            <div class="flex items-center gap-3">
+                <label for="brush-size" class="font-medium text-gray-300">Brush:</label>
+                <input type="range" id="brush-size" min="1" max="10" value="3" class="w-24">
+                 <button id="clear" class="bg-red-600 hover:bg-red-700 font-semibold py-2 px-4 rounded-lg transition-colors duration-200">Clear</button>
+            </div>
+        </div>
+
+        <!-- Canvas -->
+        <div class="bg-gray-800 rounded-lg shadow-2xl overflow-hidden">
+            <canvas id="sandbox-canvas" class="w-full h-auto block"></canvas>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('sandbox-canvas');
+            const ctx = canvas.getContext('2d');
+
+            // --- Configuration ---
+            const PIXEL_SIZE = 5; // Size of each particle "pixel"
+            let canvasWidth = Math.floor(800 / PIXEL_SIZE) * PIXEL_SIZE;
+            let canvasHeight = Math.floor(600 / PIXEL_SIZE) * PIXEL_SIZE;
+            
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
+
+            const GRID_WIDTH = canvas.width / PIXEL_SIZE;
+            const GRID_HEIGHT = canvas.height / PIXEL_SIZE;
+
+            // --- Particle Definitions ---
+            const PARTICLE_TYPES = {
+                EMPTY: 0,
+                DIRT: 1,
+                SAND: 2,
+                WATER: 3,
+            };
+
+            const PARTICLE_COLORS = {
+                [PARTICLE_TYPES.EMPTY]: '#1f2937', // bg-gray-800
+                [PARTICLE_TYPES.DIRT]: '#854d0e',
+                [PARTICLE_TYPES.SAND]: '#facc15',
+                [PARTICLE_TYPES.WATER]: '#38bdf8',
+            };
+            
+            // --- State ---
+            let grid = new Uint8Array(GRID_WIDTH * GRID_HEIGHT).fill(PARTICLE_TYPES.EMPTY);
+            let currentParticleType = PARTICLE_TYPES.SAND;
+            let isMouseDown = false;
+            let brushSize = 3;
+
+            // --- UI Elements ---
+            const buttons = {
+                sand: document.getElementById('sand'),
+                water: document.getElementById('water'),
+                dirt: document.getElementById('dirt'),
+                eraser: document.getElementById('eraser'),
+                clear: document.getElementById('clear'),
+                brushSizeSlider: document.getElementById('brush-size'),
+            };
+
+            // --- Helper Functions ---
+            const getIndex = (x, y) => x + y * GRID_WIDTH;
+            const isValid = (x, y) => x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT;
+
+            const setParticle = (x, y, type) => {
+                if (isValid(x, y)) {
+                    grid[getIndex(x, y)] = type;
+                }
+            };
+
+            const getParticle = (x, y) => {
+                if (!isValid(x, y)) return PARTICLE_TYPES.DIRT; // Treat out-of-bounds as a wall
+                return grid[getIndex(x, y)];
+            };
+            
+            const swapParticles = (x1, y1, x2, y2) => {
+                if (!isValid(x1, y1) || !isValid(x2, y2)) return;
+                const idx1 = getIndex(x1, y1);
+                const idx2 = getIndex(x2, y2);
+                [grid[idx1], grid[idx2]] = [grid[idx2], grid[idx1]];
+            };
+
+            // --- Simulation Logic ---
+            function update() {
+                // Iterate backwards to handle gravity correctly in one pass
+                for (let y = GRID_HEIGHT - 2; y >= 0; y--) {
+                    // Randomize iteration direction to prevent bias
+                    const startX = Math.random() < 0.5 ? 0 : GRID_WIDTH - 1;
+                    const endX = Math.random() < 0.5 ? GRID_WIDTH : -1;
+                    const stepX = startX < endX ? 1 : -1;
+
+                    for (let x = startX; x !== endX; x += stepX) {
+                        const currentType = getParticle(x, y);
+
+                        switch (currentType) {
+                            case PARTICLE_TYPES.SAND:
+                                updateFallingParticle(x, y, currentType);
+                                break;
+                            case PARTICLE_TYPES.WATER:
+                                updateWater(x, y);
+                                break;
+                        }
+                    }
+                }
+            }
+            
+            function updateFallingParticle(x, y, type) {
+                const below = getParticle(x, y + 1);
+                const belowLeft = getParticle(x - 1, y + 1);
+                const belowRight = getParticle(x + 1, y + 1);
+
+                const canSinkThrough = (targetType) => {
+                    // Sand can now fall through empty space or water
+                    return targetType === PARTICLE_TYPES.EMPTY || targetType === PARTICLE_TYPES.WATER;
+                };
+
+                if (canSinkThrough(below)) {
+                    swapParticles(x, y, x, y + 1);
+                } else if (canSinkThrough(belowLeft)) {
+                    swapParticles(x, y, x - 1, y + 1);
+                } else if (canSinkThrough(belowRight)) {
+                    swapParticles(x, y, x + 1, y + 1);
+                }
+            }
+
+            function updateWater(x, y) {
+                const below = getParticle(x, y + 1);
+                if (below === PARTICLE_TYPES.EMPTY) {
+                    swapParticles(x, y, x, y + 1);
+                    return;
+                }
+
+                // Flow sideways
+                const dir = Math.random() < 0.5 ? 1 : -1;
+                const side1 = getParticle(x + dir, y);
+                const side2 = getParticle(x - dir, y);
+
+                if (side1 === PARTICLE_TYPES.EMPTY) {
+                    swapParticles(x, y, x + dir, y);
+                } else if (side2 === PARTICLE_TYPES.EMPTY) {
+                    swapParticles(x, y, x - dir, y);
+                }
+            }
+
+
+            // --- Drawing Logic ---
+            function draw() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    for (let x = 0; x < GRID_WIDTH; x++) {
+                        const particleType = getParticle(x, y);
+                        if (particleType !== PARTICLE_TYPES.EMPTY) {
+                            ctx.fillStyle = PARTICLE_COLORS[particleType];
+                            ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+                        }
+                    }
+                }
+            }
+            
+            // --- Main Loop ---
+            function gameLoop() {
+                update();
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+
+            // --- User Interaction ---
+            function drawParticles(e) {
+                if (!isMouseDown) return;
+                
+                const rect = canvas.getBoundingClientRect();
+                // Support both mouse and touch events
+                const clientX = e.clientX ?? e.touches[0].clientX;
+                const clientY = e.clientY ?? e.touches[0].clientY;
+
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+
+                const canvasX = (clientX - rect.left) * scaleX;
+                const canvasY = (clientY - rect.top) * scaleY;
+                
+                const gridX = Math.floor(canvasX / PIXEL_SIZE);
+                const gridY = Math.floor(canvasY / PIXEL_SIZE);
+
+                // Draw in a circle around the cursor
+                const radius = brushSize - 1;
+                for (let i = -radius; i <= radius; i++) {
+                    for (let j = -radius; j <= radius; j++) {
+                        if (i * i + j * j <= radius * radius) {
+                           const drawX = gridX + i;
+                           const drawY = gridY + j;
+                           // Don't overwrite existing walls unless erasing
+                           if (isValid(drawX, drawY) && (getParticle(drawX, drawY) !== PARTICLE_TYPES.DIRT || currentParticleType === PARTICLE_TYPES.EMPTY)) {
+                               setParticle(drawX, drawY, currentParticleType);
+                           }
+                        }
+                    }
+                }
+            }
+
+            canvas.addEventListener('mousedown', (e) => {
+                isMouseDown = true;
+                drawParticles(e);
+            });
+            canvas.addEventListener('mouseup', () => isMouseDown = false);
+            canvas.addEventListener('mouseleave', () => isMouseDown = false);
+            canvas.addEventListener('mousemove', drawParticles);
+            
+            // Touch events for mobile
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                isMouseDown = true;
+                drawParticles(e);
+            }, { passive: false });
+            canvas.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                isMouseDown = false;
+            }, { passive: false });
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                drawParticles(e);
+            }, { passive: false });
+
+
+            // --- UI Event Listeners ---
+            function setActiveButton(selectedButton) {
+                document.querySelectorAll('.element-button').forEach(btn => btn.classList.remove('active'));
+                selectedButton.classList.add('active');
+            }
+
+            buttons.sand.addEventListener('click', () => {
+                currentParticleType = PARTICLE_TYPES.SAND;
+                setActiveButton(buttons.sand);
+            });
+            buttons.water.addEventListener('click', () => {
+                currentParticleType = PARTICLE_TYPES.WATER;
+                setActiveButton(buttons.water);
+            });
+            buttons.dirt.addEventListener('click', () => {
+                currentParticleType = PARTICLE_TYPES.DIRT;
+                setActiveButton(buttons.dirt);
+            });
+            buttons.eraser.addEventListener('click', () => {
+                currentParticleType = PARTICLE_TYPES.EMPTY;
+                setActiveButton(buttons.eraser);
+            });
+            buttons.clear.addEventListener('click', () => {
+                grid.fill(PARTICLE_TYPES.EMPTY);
+            });
+            buttons.brushSizeSlider.addEventListener('input', (e) => {
+                brushSize = parseInt(e.target.value, 10);
+            });
+            
+            // --- Initialization ---
+            setActiveButton(buttons.sand);
+            brushSize = parseInt(buttons.brushSizeSlider.value, 10);
+            gameLoop();
+        });
+    </script>
+
+</body>
+</html>
+
+
+
